@@ -5,7 +5,9 @@
   "type": "module",
   "scripts": {
     "build": "vite build",
-    "dev": "vite"
+    "dev": "vite",
+    "dev:backend": "node server/index.js",
+    "dev:all": "concurrently --kill-others-on-fail \"npm run dev\" \"npm run dev:backend\""
   },
   "dependencies": {
     "@emotion/react": "11.14.0",
@@ -41,6 +43,10 @@
     "@radix-ui/react-tooltip": "1.1.8",
     "canvas-confetti": "1.9.4",
     "class-variance-authority": "0.7.1",
+    "concurrently": "9.1.2",
+    "cors": "2.8.0",
+    "dotenv": "16.4.1",
+    "express": "4.21.2",
     "clsx": "2.1.1",
     "cmdk": "1.1.1",
     "date-fns": "3.6.0",

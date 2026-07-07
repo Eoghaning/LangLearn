@@ -4,7 +4,7 @@ import {
   Trash2, ChevronLeft, ChevronRight, RotateCcw, Link2, Globe,
   ArrowRight, FlipHorizontal, AlignVerticalJustifyCenter,
   Trophy, Languages, Search, Maximize2, Eye, EyeOff,
-  Copy, ArrowLeftRight, Check,
+  Copy, ArrowLeftRight, Check, PanelRightClose, PanelRightOpen,
 } from "lucide-react";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -46,9 +46,13 @@ function uid() { return Math.random().toString(36).slice(2, 9); }
 
 async function autoTranslate(text: string, from: string, to: string): Promise<string> {
   try {
-    const r = await fetch(`https://api.mymemory.translated.net/get?q=${encodeURIComponent(text)}&langpair=${from}|${to}`);
+    const r = await fetch("/api/translate", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ text, from, to }),
+    });
     const d = await r.json();
-    return d.responseData?.translatedText ?? "";
+    return d.translatedText ?? "";
   } catch { return ""; }
 }
 
@@ -144,7 +148,7 @@ function Navbar({ view, nativeLang, setNativeLang, targetLang, setTargetLang, on
           <NTab active={view === "grid"}      onClick={() => onNav("grid")}      icon={<LayoutGrid className="w-3.5 h-3.5" />}  label="Grid" />
           <NTab active={view === "flowchart"} onClick={() => onNav("flowchart")} icon={<GitBranch className="w-3.5 h-3.5" />}  label="Flowchart" />
           <div className="w-px h-4 bg-border mx-0.5" />
-          <NTab active={view === "games"}     onClick={() => onNav("games")}     icon={<Trophy className="w-3.5 h-3.5" />}      label="Games" />
+          <NTab active={view === "games"}     onClick={() => onNav("games")}     icon={<Trophy className="w-3.5 h-3.5" />}      label="Quiz" />
           <NTab active={view === "translate"} onClick={() => onNav("translate")} icon={<Languages className="w-3.5 h-3.5" />}   label="Translate" />
         </div>
         <div className="flex-1" />
@@ -538,6 +542,11 @@ function FlowchartEditor({ set, onSave, onBack, nLO, tLO }: { set: StudySet; onS
   const [selectedEdgeId, setSelectedEdgeId] = useState<string | null>(null);
   const [connectMode, setConnectMode] = useState(false);
   const [connectSrc, setConnectSrc]   = useState<string | null>(null);
+  const [inspectorOpen, setInspectorOpen] = useState(true);
+  const setMode = (mode: "select" | "connect") => {
+    setConnectMode(mode === "connect");
+    setConnectSrc(null);
+  };
   const [edgeStyle, setEdgeStyle]     = useState<EdgeStyle>("solid");
   const [translating, setTranslating] = useState<string | null>(null);
   const dragRef = useRef<MoveDrag | ResizeDrag | null>(null);
@@ -568,7 +577,7 @@ function FlowchartEditor({ set, onSave, onBack, nLO, tLO }: { set: StudySet; onS
   const onMouseMove = (e: React.MouseEvent) => {
     const d = dragRef.current; if (!d) return;
     if (d.kind === "move") setNodes(p => p.map(n => n.id === d.nodeId ? { ...n, x: Math.max(0, d.nX + e.clientX - d.sX), y: Math.max(0, d.nY + e.clientY - d.sY) } : n));
-    else setNodes(p => p.map(n => n.id === d.nodeId ? { ...n, w: Math.max(180, d.nW + e.clientX - d.sX), h: Math.max(110, d.nH + e.clientY - d.sY) } : n));
+    else setNodes(p => p.map(n => n.id === d.nodeId ? { ...n, w: Math.max(100, Math.min(600, d.nW + e.clientX - d.sX)), h: Math.max(100, Math.min(500, d.nH + e.clientY - d.sY)) } : n));
   };
   const onMouseUp = () => { dragRef.current = null; };
   const onTextChange = (id: string, f: "native" | "target", v: string) => setNodes(p => p.map(n => n.id === id ? { ...n, [f]: v } : n));
@@ -588,6 +597,12 @@ function FlowchartEditor({ set, onSave, onBack, nLO, tLO }: { set: StudySet; onS
     const c: EdgeStyle[] = ["solid", "dotted", "dashed"];
     setEdges(p => p.map(e => e.id === id ? { ...e, style: c[(c.indexOf(e.style) + 1) % 3] } : e));
   };
+  const handleEdgeSelect = (edgeId: string, e?: React.MouseEvent) => {
+    e?.stopPropagation();
+    setSelectedEdgeId(edgeId);
+    setSelectedId(null);
+    setConnectMode(false);
+  };
   const doTranslate = async (nodeId: string) => {
     const node = nodes.find(n => n.id === nodeId); if (!node?.native) return;
     setTranslating(nodeId);
@@ -595,9 +610,35 @@ function FlowchartEditor({ set, onSave, onBack, nLO, tLO }: { set: StudySet; onS
     if (t) setNodes(p => p.map(n => n.id === nodeId ? { ...n, target: t } : n));
     setTranslating(null);
   };
-  const botMid = (n: FlowNode) => ({ x: n.x + n.w / 2, y: n.y + n.h });
-  const topMid = (n: FlowNode) => ({ x: n.x + n.w / 2, y: n.y });
+  const getAnchorPoints = (from: FlowNode, to: FlowNode) => {
+    const sx = from.x + from.w / 2;
+    const sy = from.y + from.h / 2;
+    const tx = to.x + to.w / 2;
+    const ty = to.y + to.h / 2;
+    const dx = tx - sx;
+    const dy = ty - sy;
 
+    if (Math.abs(dx) >= Math.abs(dy)) {
+      return {
+        from: { x: from.x + (dx >= 0 ? from.w : 0), y: from.y + from.h / 2 },
+        to: { x: to.x + (dx >= 0 ? 0 : to.w), y: to.y + to.h / 2 },
+      };
+    }
+
+    return {
+      from: { x: from.x + from.w / 2, y: from.y + (dy >= 0 ? from.h : 0) },
+      to: { x: to.x + to.w / 2, y: to.y + (dy >= 0 ? 0 : to.h) },
+    };
+  };
+  const updateNodeSize = (nodeId: string, field: "w" | "h", value: string) => {
+    const parsed = Number(value);
+    if (!Number.isFinite(parsed)) return;
+    const max = field === "w" ? 600 : 500;
+    setNodes(p => p.map(n => n.id === nodeId ? { ...n, [field]: Math.max(100, Math.min(max, parsed)) } : n));
+  };
+
+  const selectedNode = nodes.find(n => n.id === selectedId) ?? null;
+  const selectedEdge = edges.find(e => e.id === selectedEdgeId) ?? null;
   const ESTYLES = [{ v: "solid" as EdgeStyle, lbl: "──" }, { v: "dotted" as EdgeStyle, lbl: "···" }, { v: "dashed" as EdgeStyle, lbl: "╌╌" }];
 
   return (
@@ -606,8 +647,12 @@ function FlowchartEditor({ set, onSave, onBack, nLO, tLO }: { set: StudySet; onS
         <button onClick={onBack} className="p-1.5 rounded-lg hover:bg-muted text-muted-foreground"><ChevronLeft className="w-5 h-5" /></button>
         <input value={name} onChange={e => setName(e.target.value)} className="text-base font-bold bg-transparent border-b-2 border-transparent hover:border-border focus:border-primary focus:outline-none px-1 py-0.5 transition-colors" />
         <div className="flex-1" />
+        <button onClick={() => setInspectorOpen(v => !v)} className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-xl border border-border bg-background hover:bg-muted">
+          {inspectorOpen ? <PanelRightClose className="w-3.5 h-3.5" /> : <PanelRightOpen className="w-3.5 h-3.5" />}
+          {inspectorOpen ? "Hide inspector" : "Show inspector"}
+        </button>
         {selectedId && !connectMode && (
-          <button onClick={deleteSelected} className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium bg-destructive/10 text-destructive border border-destructive/20 rounded-lg hover:bg-destructive/20"><Trash2 className="w-3.5 h-3.5" /> Delete</button>
+          <button onClick={deleteSelected} className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium bg-destructive/10 text-destructive border border-destructive/20 rounded-xl hover:bg-destructive/20"><Trash2 className="w-3.5 h-3.5" /> Delete</button>
         )}
         <button onClick={() => onSave({ ...set, name, nativeLang: nLO.code, targetLang: tLO.code, nodes, edges })} className="flex items-center gap-2 px-4 py-2 bg-primary text-primary-foreground rounded-xl text-xs font-semibold hover:opacity-90"><Save className="w-3.5 h-3.5" /> Save</button>
       </div>
@@ -623,6 +668,13 @@ function FlowchartEditor({ set, onSave, onBack, nLO, tLO }: { set: StudySet; onS
             addNodeAt(e.clientX - bounds.left, e.clientY - bounds.top, shape);
           }}>
 
+          <div className="absolute left-4 top-4 flex items-center gap-2 rounded-2xl border border-border bg-card/95 px-2 py-2 shadow-lg backdrop-blur" style={{ pointerEvents: "auto", zIndex: 50 }}>
+            <button onClick={() => setMode("select")} className={`px-3 py-1.5 text-xs font-semibold rounded-xl transition ${!connectMode ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:text-foreground"}`}>Select</button>
+            <button onClick={() => setMode("connect")} className={`px-3 py-1.5 text-xs font-semibold rounded-xl transition ${connectMode ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:text-foreground"}`}><span className="inline-flex items-center gap-1"><Link2 className="w-3.5 h-3.5" /> Connect</span></button>
+            <div className="mx-1 h-5 w-px bg-border" />
+            <button onClick={() => { setMode("select"); addNodeAt(140 + Math.random() * 120, 100 + Math.random() * 80, "rect"); }} className="px-3 py-1.5 text-xs font-semibold rounded-xl border border-border bg-background text-foreground hover:bg-muted">+ Add</button>
+          </div>
+
           <svg className="absolute inset-0" style={{ width: "100%", height: "100%", minWidth: 1400, minHeight: 900, pointerEvents: "none" }}>
           <defs>
             <marker id="arr" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto">
@@ -633,17 +685,27 @@ function FlowchartEditor({ set, onSave, onBack, nLO, tLO }: { set: StudySet; onS
             const fn = nodes.find(n => n.id === edge.from);
             const tn = nodes.find(n => n.id === edge.to);
             if (!fn || !tn) return null;
-            const f = botMid(fn); const t = topMid(tn);
-            const cy = f.y + (t.y - f.y) * 0.6;
+            const pts = getAnchorPoints(fn, tn);
+            const f = pts.from;
+            const t = pts.to;
+            const isHorizontal = Math.abs(t.x - f.x) >= Math.abs(t.y - f.y);
+            const c1x = f.x + (isHorizontal ? (t.x - f.x) * 0.35 : 0);
+            const c1y = f.y + (isHorizontal ? 0 : (t.y - f.y) * 0.35);
+            const c2x = t.x + (isHorizontal ? (f.x - t.x) * 0.35 : 0);
+            const c2y = t.y + (isHorizontal ? 0 : (f.y - t.y) * 0.35);
             const mX = (f.x + t.x) / 2; const mY = (f.y + t.y) / 2;
             const dash = edge.style === "solid" ? undefined : edge.style === "dotted" ? "4 5" : "12 6";
             const selected = edge.id === selectedEdgeId;
             return (
               <g key={edge.id} style={{ pointerEvents: "all" }}>
-                <path d={`M ${f.x} ${f.y} C ${f.x} ${cy}, ${t.x} ${cy}, ${t.x} ${t.y}`} fill="none" stroke="transparent" strokeWidth="20" style={{ cursor: "pointer" }} onClick={e => { e.stopPropagation(); setSelectedEdgeId(edge.id); cycleEdge(edge.id); }} />
-                <path d={`M ${f.x} ${f.y} C ${f.x} ${cy}, ${t.x} ${cy}, ${t.x} ${t.y}`} fill="none" stroke={selected ? "var(--accent)" : "var(--primary)"} strokeWidth={selected ? 3.5 : 2.5} strokeOpacity={selected ? 0.95 : 0.65} strokeDasharray={dash} markerEnd="url(#arr)" style={{ pointerEvents: "none" }} />
-                <circle cx={mX} cy={mY} r={9} fill="white" stroke="var(--destructive)" strokeWidth="1.5" style={{ cursor: "pointer" }} onClick={e => { e.stopPropagation(); setSelectedEdgeId(edge.id); deleteEdge(edge.id); }} />
-                <text x={mX} y={mY + 4.5} textAnchor="middle" fontSize="13" fill="var(--destructive)" fontWeight="800" style={{ pointerEvents: "none", userSelect: "none" }}>×</text>
+                <path d={`M ${f.x} ${f.y} C ${c1x} ${c1y}, ${c2x} ${c2y}, ${t.x} ${t.y}`} fill="none" stroke="transparent" strokeWidth="24" style={{ cursor: "pointer" }} onClick={e => handleEdgeSelect(edge.id, e)} />
+                <path d={`M ${f.x} ${f.y} C ${c1x} ${c1y}, ${c2x} ${c2y}, ${t.x} ${t.y}`} fill="none" stroke={selected ? "var(--accent)" : "var(--primary)"} strokeWidth={selected ? 3.5 : 2.5} strokeOpacity={selected ? 0.95 : 0.65} strokeDasharray={dash} markerEnd="url(#arr)" style={{ pointerEvents: "none" }} />
+                {selected && (
+                  <g onClick={e => { e.stopPropagation(); deleteEdge(edge.id); setSelectedEdgeId(null); }} style={{ cursor: "pointer" }}>
+                    <rect x={mX - 18} y={mY - 12} width="36" height="24" rx="12" fill="rgba(255,255,255,0.95)" stroke="var(--border)" />
+                    <text x={mX} y={mY + 4.5} textAnchor="middle" fontSize="11" fill="var(--destructive)" fontWeight="700">Delete</text>
+                  </g>
+                )}
               </g>
             );
           })}
@@ -667,19 +729,51 @@ function FlowchartEditor({ set, onSave, onBack, nLO, tLO }: { set: StudySet; onS
             </div>
           </div>
         )}
-        {connectMode && <div className="absolute top-3 left-1/2 -translate-x-1/2 bg-primary text-primary-foreground text-xs px-4 py-1.5 rounded-full font-medium shadow pointer-events-none">{connectSrc ? "Click target node · same node to cancel" : "Click source node to start arrow"}</div>}
-        {!connectMode && <div className="absolute bottom-3 left-1/2 -translate-x-1/2 text-[11px] text-muted-foreground px-3 py-1 bg-card/80 rounded-full border border-border pointer-events-none">Drag to move · ↘ corner to resize · click line to cycle style · × to remove</div>}
+        {connectMode && <div className="absolute top-4 left-1/2 -translate-x-1/2 bg-primary text-primary-foreground text-xs px-4 py-1.5 rounded-full font-medium shadow pointer-events-none">{connectSrc ? "Choose the second node to finish the connection" : "Choose the first node to start the connection"}</div>}
+        <div className="absolute bottom-4 left-1/2 -translate-x-1/2 flex items-center gap-1 px-2 py-1.5 bg-card/95 rounded-full border border-border shadow-sm backdrop-blur">
+          <button onClick={() => setMode("select")} className={`rounded-lg px-2 py-0.5 text-xs font-semibold transition ${!connectMode ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:text-foreground"}`}>Select</button>
+          <div className="h-3 w-px bg-border" />
+          <span className="text-[11px] text-muted-foreground">Drag · Resize</span>
+          <div className="h-3 w-px bg-border" />
+          <button onClick={() => setMode("connect")} className={`rounded-lg px-2 py-0.5 text-xs font-semibold transition ${connectMode ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:text-foreground"}`}>Connect</button>
+        </div>
+        {!inspectorOpen && (
+          <button onClick={() => setInspectorOpen(true)} className="absolute right-4 top-4 z-20 flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-xl border border-border bg-card/95 shadow-sm hover:bg-muted">
+            <PanelRightOpen className="w-3.5 h-3.5" /> Open inspector
+          </button>
+        )}
       </div>
+      {inspectorOpen && (
       <aside className="w-96 border-l border-border bg-card/90 overflow-y-auto">
         <div className="sticky top-0 z-20 bg-card/95 border-b border-border px-4 py-4">
-          <h2 className="text-sm font-semibold">Flow Inspector</h2>
-          <p className="text-xs text-muted-foreground mt-1">Select nodes or arrows from here.</p>
+          <div className="flex items-center justify-between gap-2">
+            <div>
+              <h2 className="text-sm font-semibold">Flow Inspector</h2>
+              <p className="text-xs text-muted-foreground mt-1">Properties, styles, and connections.</p>
+            </div>
+            <div className="rounded-full border border-border bg-muted/60 px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.2em] text-muted-foreground">{selectedNode ? "Node" : selectedEdge ? "Arrow" : "Ready"}</div>
+          </div>
         </div>
-        <div className="px-4 py-4 space-y-6">
+        <div className="px-4 py-4 space-y-5">
+          <div className="rounded-3xl border border-border bg-muted/40 p-3">
+            <p className="text-[10px] uppercase tracking-[0.25em] text-muted-foreground mb-2">Toolbar</p>
+            <p className="text-xs text-muted-foreground mb-3">
+              Use these mode buttons or the floating toolbar in the canvas to switch between Select, Connect, and Add node.
+            </p>
+            <div className="flex gap-2">
+              <button onClick={() => setMode("select")} className={`flex-1 rounded-2xl border px-3 py-2 text-sm font-semibold transition ${!connectMode ? "border-primary bg-primary/10 text-primary" : "border-border bg-card text-foreground hover:border-primary/40"}`}>
+                Select
+              </button>
+              <button onClick={() => setMode("connect")} className={`flex-1 rounded-2xl border px-3 py-2 text-sm font-semibold transition ${connectMode ? "border-primary bg-primary/10 text-primary" : "border-border bg-card text-foreground hover:border-primary/40"}`}>
+                Connect
+              </button>
+            </div>
+          </div>
+
           <div>
             <div className="flex items-center justify-between mb-3">
-              <p className="text-xs uppercase tracking-[0.2em] text-muted-foreground">Node palette</p>
-              <span className="text-xs text-muted-foreground">Drag to add</span>
+              <p className="text-xs uppercase tracking-[0.2em] text-muted-foreground">Add nodes</p>
+              <span className="text-xs text-muted-foreground">Drag or click</span>
             </div>
             <div className="grid grid-cols-3 gap-2">
               {(["rect", "ellipse", "diamond"] as NodeShape[]).map(shape => (
@@ -694,20 +788,71 @@ function FlowchartEditor({ set, onSave, onBack, nLO, tLO }: { set: StudySet; onS
               ))}
             </div>
           </div>
-          <div>
-            <div className="flex items-center justify-between mb-3">
-              <p className="text-xs uppercase tracking-[0.2em] text-muted-foreground">Arrow palette</p>
-              <span className="text-xs text-muted-foreground">Pick style</span>
-            </div>
-            <div className="grid grid-cols-3 gap-2">
-              {ESTYLES.map(style => (
-                <button key={style.v} onClick={() => { setConnectMode(true); setConnectSrc(null); setEdgeStyle(style.v); }} className={`rounded-3xl border border-border bg-card px-3 py-3 text-center text-xs font-medium transition ${edgeStyle === style.v ? "border-primary bg-primary/10" : "hover:border-primary/50 hover:bg-primary/5"}`}>
-                  <div className="text-base mb-1">{style.lbl}</div>
-                  <div className="text-[11px] text-muted-foreground">Make {style.v}</div>
+
+          <div className="rounded-3xl border border-border bg-card/70 p-4 space-y-4">
+            {selectedNode ? (
+              <div className="space-y-3">
+                <div className="flex items-center justify-between gap-2">
+                  <div>
+                    <p className="text-sm font-semibold">Selected node</p>
+                    <p className="text-xs text-muted-foreground">Edit the selected box or delete it.</p>
+                  </div>
+                  <button onClick={deleteSelected} className="rounded-xl border border-destructive/20 bg-destructive/10 px-2.5 py-1.5 text-[11px] font-medium text-destructive">Delete</button>
+                </div>
+                <div className="grid gap-2 text-xs text-muted-foreground">
+                  <div>Shape: {selectedNode.shape}</div>
+                  <div>Layout: {selectedNode.splitDir}</div>
+                </div>
+                <div className="grid grid-cols-2 gap-2 text-xs">
+                  {(["rect", "ellipse", "diamond"] as NodeShape[]).map(shape => (
+                    <button key={shape} onClick={() => onSetShape(selectedNode.id, shape)}
+                      className={`rounded-2xl border px-3 py-2 text-left transition ${selectedNode.shape === shape ? "border-primary bg-primary/10" : "border-border bg-card hover:border-primary/40"}`}>
+                      <div className="font-semibold">{shape}</div>
+                      <div className="text-muted-foreground">Swap shape</div>
+                    </button>
+                  ))}
+                </div>
+                <div className="grid grid-cols-2 gap-2 text-xs">
+                  <label className="rounded-2xl border border-border bg-card px-3 py-2">
+                    <div className="text-[10px] uppercase tracking-[0.2em] text-muted-foreground mb-1">Width</div>
+                    <input type="number" min="100" max="600" step="10" value={selectedNode.w} onBlur={e => updateNodeSize(selectedNode.id, "w", e.target.value)} onKeyDown={e => e.key === "Enter" && updateNodeSize(selectedNode.id, "w", (e.target as HTMLInputElement).value)} onChange={e => setNodes(p => p.map(n => n.id === selectedNode.id ? { ...n, w: Number(e.target.value) || n.w } : n))} className="w-full bg-transparent outline-none" />
+                  </label>
+                  <label className="rounded-2xl border border-border bg-card px-3 py-2">
+                    <div className="text-[10px] uppercase tracking-[0.2em] text-muted-foreground mb-1">Height</div>
+                    <input type="number" min="100" max="500" step="10" value={selectedNode.h} onBlur={e => updateNodeSize(selectedNode.id, "h", e.target.value)} onKeyDown={e => e.key === "Enter" && updateNodeSize(selectedNode.id, "h", (e.target as HTMLInputElement).value)} onChange={e => setNodes(p => p.map(n => n.id === selectedNode.id ? { ...n, h: Number(e.target.value) || n.h } : n))} className="w-full bg-transparent outline-none" />
+                  </label>
+                </div>
+              </div>
+            ) : selectedEdge ? (
+              <div className="space-y-3">
+                <div className="flex items-center justify-between gap-2">
+                  <div>
+                    <p className="text-sm font-semibold">Selected arrow</p>
+                    <p className="text-xs text-muted-foreground">Adjust the style or remove it.</p>
+                  </div>
+                  <button onClick={() => { deleteEdge(selectedEdge.id); setSelectedEdgeId(null); }} className="rounded-xl border border-destructive/20 bg-destructive/10 px-2.5 py-1.5 text-[11px] font-medium text-destructive">Delete</button>
+                </div>
+                <div className="grid gap-2 text-xs text-muted-foreground">
+                  <div>Style: {selectedEdge.style}</div>
+                </div>
+                <div className="grid grid-cols-3 gap-2 text-xs">
+                  {ESTYLES.map(style => (
+                    <button key={style.v} onClick={() => setEdges(p => p.map(e => e.id === selectedEdge.id ? { ...e, style: style.v } : e))}
+                      className={`rounded-2xl border px-3 py-2 text-left transition ${selectedEdge.style === style.v ? "border-primary bg-primary/10" : "border-border bg-card hover:border-primary/40"}`}>
+                      <div className="font-semibold">{style.lbl}</div>
+                      <div className="text-muted-foreground">{style.v}</div>
+                    </button>
+                  ))}
+                </div>
+                <button onClick={() => setEdges(p => p.map(e => e.id === selectedEdge.id ? { ...e, from: e.to, to: e.from } : e))} className="w-full rounded-2xl border border-border bg-card px-3 py-2 text-xs font-medium text-foreground hover:border-primary/40 transition">
+                  ↔ Reverse direction
                 </button>
-              ))}
-            </div>
+              </div>
+            ) : (
+              <div className="text-sm text-muted-foreground">Select a node or an arrow to edit it here.</div>
+            )}
           </div>
+
           <div>
             <div className="flex items-center justify-between mb-3">
               <p className="text-xs uppercase tracking-[0.2em] text-muted-foreground">Arrows</p>
@@ -718,63 +863,20 @@ function FlowchartEditor({ set, onSave, onBack, nLO, tLO }: { set: StudySet; onS
                 const from = nodes.find(n => n.id === edge.from);
                 const to = nodes.find(n => n.id === edge.to);
                 return (
-                  <button key={edge.id} onClick={() => { setSelectedEdgeId(edge.id); setSelectedId(null); setConnectMode(false); }} className={`w-full text-left rounded-2xl border px-3 py-3 transition-all ${selectedEdgeId === edge.id ? "border-primary bg-primary/10" : "border-border bg-card hover:border-primary/40"}`}>
+                  <button key={edge.id} onClick={() => handleEdgeSelect(edge.id)} className={`w-full text-left rounded-2xl border px-3 py-3 transition-all ${selectedEdgeId === edge.id ? "border-primary bg-primary/10" : "border-border bg-card hover:border-primary/40"}`}>
                     <div className="flex items-center justify-between gap-2">
                       <span className="text-sm truncate">{from?.native || "source"} → {to?.native || "target"}</span>
                       <span className="text-xs text-muted-foreground uppercase">{edge.style}</span>
                     </div>
-                    <p className="text-xs text-muted-foreground mt-1 truncate">Click to select, then delete or edit.</p>
+                    <p className="text-xs text-muted-foreground mt-1 truncate">Click to view and remove it.</p>
                   </button>
                 );
               })}
             </div>
           </div>
-          {(selectedId || selectedEdgeId) && (
-            <div className="rounded-3xl border border-border bg-muted/50 p-4 space-y-4">
-              <div>
-                <p className="text-xs uppercase tracking-[0.2em] text-muted-foreground mb-2">Inspector</p>
-                {selectedId && (
-                  <div className="space-y-3">
-                    <div className="text-sm font-semibold">Selected node</div>
-                    <div className="grid gap-2 text-xs text-muted-foreground">
-                      <div>ID: {selectedId}</div>
-                      <div>Shape: {nodes.find(n => n.id === selectedId)?.shape}</div>
-                      <div>Layout: {nodes.find(n => n.id === selectedId)?.splitDir}</div>
-                    </div>
-                    <div className="grid grid-cols-2 gap-2 text-xs">
-                      {(["rect", "ellipse", "diamond"] as NodeShape[]).map(shape => (
-                        <button key={shape} onClick={() => onSetShape(selectedId, shape)}
-                          className={`rounded-2xl border px-3 py-2 text-left transition ${nodes.find(n => n.id === selectedId)?.shape === shape ? "border-primary bg-primary/10" : "border-border bg-card hover:border-primary/40"}`}>
-                          <div className="font-semibold">{shape}</div>
-                          <div className="text-muted-foreground">Swap shape</div>
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-                )}
-                {selectedEdgeId && (
-                  <div className="space-y-3">
-                    <div className="text-sm font-semibold">Selected arrow</div>
-                    <div className="grid gap-2 text-xs text-muted-foreground">
-                      <div>ID: {selectedEdgeId}</div>
-                      <div>Style: {edges.find(e => e.id === selectedEdgeId)?.style}</div>
-                    </div>
-                    <div className="grid grid-cols-3 gap-2 text-xs">
-                      {ESTYLES.map(style => (
-                        <button key={style.v} onClick={() => setEdges(p => p.map(e => e.id === selectedEdgeId ? { ...e, style: style.v } : e))}
-                          className={`rounded-2xl border px-3 py-2 text-left transition ${edges.find(e => e.id === selectedEdgeId)?.style === style.v ? "border-primary bg-primary/10" : "border-border bg-card hover:border-primary/40"}`}>
-                          <div className="font-semibold">{style.lbl}</div>
-                          <div className="text-muted-foreground">Swap style</div>
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-                )}
-              </div>
-            </div>
-          )}
         </div>
       </aside>
+      )}
     </div>
   </div>
     );
@@ -823,10 +925,10 @@ function NodeCard({ node, isSelected, onMoveStart, onResizeStart, onTextChange, 
   );
 
   const ResizeHandle = () => (
-    <div style={{ position: "absolute", right: 0, bottom: 0, width: 18, height: 18, cursor: "se-resize", zIndex: 10 }}
+    <div style={{ position: "absolute", right: 10, bottom: 10, width: 24, height: 24, cursor: "se-resize", zIndex: 30, color: "var(--primary)" }}
       onMouseDown={e => { sp(e); onResizeStart(e, node.id); }} onClick={sp}
-      className="flex items-end justify-end pr-1 pb-1">
-      <svg width="9" height="9" viewBox="0 0 9 9" className="opacity-25 pointer-events-none">
+      className="flex items-center justify-center rounded-full border border-primary/20 bg-white shadow-md">
+      <svg width="10" height="10" viewBox="0 0 9 9" className="opacity-90 pointer-events-none">
         <line x1="2" y1="9" x2="9" y2="2" stroke="currentColor" strokeWidth="1.5"/>
         <line x1="5" y1="9" x2="9" y2="5" stroke="currentColor" strokeWidth="1.5"/>
       </svg>
@@ -839,7 +941,7 @@ function NodeCard({ node, isSelected, onMoveStart, onResizeStart, onTextChange, 
   // ── RECT ──
   if (node.shape === "rect") {
     return (
-      <div style={{ ...base, border: `${bWidth} solid ${bColor}`, boxShadow: shadow, borderRadius: 16, overflow: "hidden", display: "flex", flexDirection: "column", cursor: connectMode ? "pointer" : "move", background: "white", userSelect: "none" }} {...clickProps}>
+      <div style={{ ...base, border: `${bWidth} solid ${bColor}`, boxShadow: shadow, borderRadius: 18, overflow: "hidden", display: "flex", flexDirection: "column", cursor: connectMode ? "pointer" : "move", background: "linear-gradient(135deg, rgba(255,255,255,0.98), rgba(245,248,255,0.96))", userSelect: "none" }} {...clickProps}>
         {node.splitDir === "horizontal" ? (
           <>
             <div className="flex-1 flex flex-col p-3 border-b-2 border-primary/15 bg-blue-50/30 min-h-0">
@@ -849,7 +951,6 @@ function NodeCard({ node, isSelected, onMoveStart, onResizeStart, onTextChange, 
             <div className="flex-1 flex flex-col p-3 bg-orange-50/20 min-h-0 relative">
               <LLabel lang={tLO} />
               <textarea value={node.target} onChange={e => onTextChange(node.id, "target", e.target.value)} onClick={sp} className="flex-1 w-full bg-transparent text-sm resize-none focus:outline-none leading-snug min-h-0" placeholder={`${tLO.name}…`} style={{ paddingBottom: 18 }} />
-              <TrBtn />
             </div>
           </>
         ) : (
@@ -861,7 +962,6 @@ function NodeCard({ node, isSelected, onMoveStart, onResizeStart, onTextChange, 
             <div className="flex-1 flex flex-col p-3 bg-orange-50/20 min-h-0 relative">
               <LLabel lang={tLO} short />
               <textarea value={node.target} onChange={e => onTextChange(node.id, "target", e.target.value)} onClick={sp} className="flex-1 w-full bg-transparent text-xs resize-none focus:outline-none leading-snug min-h-0" placeholder={tLO.name} style={{ paddingBottom: 18 }} />
-              <TrBtn small />
             </div>
           </div>
         )}
@@ -870,7 +970,7 @@ function NodeCard({ node, isSelected, onMoveStart, onResizeStart, onTextChange, 
             <ShapeControls />
           </div>
         )}
-        <ResizeHandle />
+        {isSelected && !connectMode && <ResizeHandle />}
       </div>
     );
   }
@@ -879,7 +979,7 @@ function NodeCard({ node, isSelected, onMoveStart, onResizeStart, onTextChange, 
   if (node.shape === "ellipse") {
     const px = node.w * 0.16; const py = node.h * 0.13;
     return (
-      <div style={{ ...base, border: `${bWidth} solid ${bColor}`, boxShadow: shadow, borderRadius: "50%", overflow: "hidden", cursor: connectMode ? "pointer" : "move", background: "white", userSelect: "none" }} {...clickProps}>
+      <div style={{ ...base, border: `${bWidth} solid ${bColor}`, boxShadow: shadow, borderRadius: "50%", overflow: "visible", cursor: connectMode ? "pointer" : "move", background: "linear-gradient(135deg, rgba(255,255,255,0.98), rgba(245,248,255,0.96))", userSelect: "none" }} {...clickProps}>
         <div style={{ position: "absolute", left: px, right: px, top: py, bottom: py, display: "flex", flexDirection: node.splitDir === "horizontal" ? "column" : "row", overflow: "hidden", gap: 2 }}>
           {node.splitDir === "horizontal" ? (
             <>
@@ -891,7 +991,6 @@ function NodeCard({ node, isSelected, onMoveStart, onResizeStart, onTextChange, 
               <div className="flex-1 flex flex-col min-h-0 items-center text-center relative">
                 <LLabel lang={tLO} short />
                 <textarea value={node.target} onChange={e => onTextChange(node.id, "target", e.target.value)} onClick={sp} className="flex-1 w-full bg-transparent text-xs resize-none focus:outline-none leading-snug min-h-0 text-center" placeholder={tLO.flag} style={{ paddingBottom: 16 }} />
-                <TrBtn small />
               </div>
             </>
           ) : (
@@ -904,7 +1003,6 @@ function NodeCard({ node, isSelected, onMoveStart, onResizeStart, onTextChange, 
               <div className="flex-1 flex flex-col min-h-0 items-center text-center relative">
                 <LLabel lang={tLO} short />
                 <textarea value={node.target} onChange={e => onTextChange(node.id, "target", e.target.value)} onClick={sp} className="flex-1 w-full bg-transparent text-[10px] resize-none focus:outline-none leading-snug min-h-0 text-center" placeholder={tLO.flag} style={{ paddingBottom: 14 }} />
-                <TrBtn small />
               </div>
             </>
           )}
@@ -914,7 +1012,7 @@ function NodeCard({ node, isSelected, onMoveStart, onResizeStart, onTextChange, 
             <ShapeControls />
           </div>
         )}
-        <ResizeHandle />
+        {isSelected && !connectMode && <ResizeHandle />}
       </div>
     );
   }
@@ -924,9 +1022,15 @@ function NodeCard({ node, isSelected, onMoveStart, onResizeStart, onTextChange, 
   const pts = `${hw},${pad} ${node.w - pad},${hh} ${hw},${node.h - pad} ${pad},${hh}`;
   const safePx = hw * 0.28; const safePy = hh * 0.28;
   return (
-    <div style={{ ...base, cursor: connectMode ? "pointer" : "move", userSelect: "none" }} {...clickProps}>
+    <div style={{ ...base, cursor: connectMode ? "pointer" : "move", userSelect: "none", overflow: "visible" }} {...clickProps}>
       <svg className="absolute inset-0 w-full h-full overflow-visible" style={{ pointerEvents: "none" }}>
-        <polygon points={pts} fill="white" stroke={bColor} strokeWidth={bWidth}
+        <defs>
+          <linearGradient id="diamondFill" x1="0%" y1="0%" x2="100%" y2="100%">
+            <stop offset="0%" stopColor="rgba(255,255,255,0.98)" />
+            <stop offset="100%" stopColor="rgba(245,248,255,0.96)" />
+          </linearGradient>
+        </defs>
+        <polygon points={pts} fill="url(#diamondFill)" stroke={bColor} strokeWidth={bWidth}
           filter={isSelected || isConnectSrc ? `drop-shadow(0 0 4px ${isConnectSrc ? "rgba(234,108,0,0.4)" : "rgba(26,86,219,0.3)"})` : "drop-shadow(0 2px 4px rgba(0,0,0,0.08))"} />
         {node.splitDir === "horizontal"
           ? <line x1={hw * 0.32} y1={hh} x2={hw * 1.68} y2={hh} stroke="rgba(26,86,219,0.2)" strokeWidth="1.5" />
@@ -943,7 +1047,6 @@ function NodeCard({ node, isSelected, onMoveStart, onResizeStart, onTextChange, 
             <div className="flex-1 flex flex-col min-h-0 items-center relative">
               <p className="text-[8px] font-mono text-muted-foreground select-none">{tLO.flag}</p>
               <textarea value={node.target} onChange={e => onTextChange(node.id, "target", e.target.value)} onClick={sp} className="flex-1 w-full bg-transparent text-[11px] resize-none focus:outline-none leading-snug min-h-0 text-center" placeholder="target" style={{ paddingBottom: 16 }} />
-              <TrBtn small />
             </div>
           </>
         ) : (
@@ -955,18 +1058,17 @@ function NodeCard({ node, isSelected, onMoveStart, onResizeStart, onTextChange, 
             <div className="flex-1 flex flex-col min-h-0 items-center relative">
               <p className="text-[8px] font-mono text-muted-foreground select-none">{tLO.flag}</p>
               <textarea value={node.target} onChange={e => onTextChange(node.id, "target", e.target.value)} onClick={sp} className="flex-1 w-full bg-transparent text-[10px] resize-none focus:outline-none leading-snug min-h-0 text-center" placeholder="target" style={{ paddingBottom: 14 }} />
-              <TrBtn small />
             </div>
           </>
         )}
       </div>
 
       {isSelected && !connectMode && (
-        <div style={{ position: "absolute", bottom: -30, left: "50%", transform: "translateX(-50%)", whiteSpace: "nowrap", zIndex: 20 }}>
+        <div style={{ position: "absolute", bottom: 12, left: "50%", transform: "translateX(-50%)", whiteSpace: "nowrap", zIndex: 20 }}>
           <ShapeControls />
         </div>
       )}
-      <ResizeHandle />
+      {isSelected && !connectMode && <ResizeHandle />}
     </div>
   );
 }
@@ -1030,7 +1132,7 @@ function GamesView({ sets }: { sets: StudySet[] }) {
       <div className="flex flex-col sm:flex-row sm:items-center gap-4 mb-8">
         <div className="flex items-center gap-3">
           <div className="w-10 h-10 rounded-xl bg-primary/10 flex items-center justify-center"><Trophy className="w-5 h-5 text-primary" /></div>
-          <div><h1 className="text-2xl font-bold">Games</h1><p className="text-muted-foreground text-sm">Choose a mode and test your saved sets.</p></div>
+          <div><h1 className="text-2xl font-bold">Quiz</h1><p className="text-muted-foreground text-sm">Choose a mode and test your saved sets.</p></div>
         </div>
         <div className="flex flex-wrap gap-2">
           <button onClick={() => setGameMode("quiz")} className={`rounded-2xl px-4 py-2 text-sm font-semibold ${gameMode === "quiz" ? "bg-primary text-primary-foreground" : "bg-card border border-border text-muted-foreground hover:border-primary/40"}`}>Translate Quiz</button>
@@ -1154,7 +1256,7 @@ function TranslateView() {
     <div className="max-w-screen-lg mx-auto px-5 py-8">
       <div className="flex items-center gap-3 mb-7">
         <div className="w-10 h-10 rounded-xl bg-primary/10 flex items-center justify-center"><Languages className="w-5 h-5 text-primary" /></div>
-        <div><h1 className="text-2xl font-bold">Translate</h1><p className="text-muted-foreground text-sm">Powered by MyMemory · 10 languages</p></div>
+        <div><h1 className="text-2xl font-bold">Translate</h1><p className="text-muted-foreground text-sm">Powered by your translation backend · 10 languages</p></div>
       </div>
 
       <div className="grid grid-cols-[1fr_80px_1fr] gap-4 items-start">
